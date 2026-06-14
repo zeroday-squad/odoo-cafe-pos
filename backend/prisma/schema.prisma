@@ -1,0 +1,187 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int       @id @default(autoincrement())
+  name      String
+  email     String    @unique
+  password  String
+  role      String    @default("employee")
+  status    Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  sessions  Session[]
+  orders    Order[]
+}
+
+model Customer {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String?
+  phone     String?
+  createdAt DateTime @default(now())
+  orders    Order[]
+}
+
+model Category {
+  id        Int       @id @default(autoincrement())
+  name      String    @unique
+  color     String    @default("#2563eb")
+  createdAt DateTime  @default(now())
+  products  Product[]
+}
+
+model Product {
+  id          Int         @id @default(autoincrement())
+  name        String
+  categoryId  Int
+  price       Float
+  unit        String      @default("piece")
+  tax         Float       @default(5)
+  description String?
+  active      Boolean     @default(true)
+  kitchen     Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  category    Category    @relation(fields: [categoryId], references: [id])
+  orderItems  OrderItem[]
+  promotions  Promotion[]
+}
+
+model Floor {
+  id        Int      @id @default(autoincrement())
+  name      String
+  createdAt DateTime @default(now())
+  tables    CafeTable[]
+}
+
+model CafeTable {
+  id        Int      @id @default(autoincrement())
+  number    String
+  seats     Int
+  active    Boolean  @default(true)
+  floorId   Int
+  floor     Floor    @relation(fields: [floorId], references: [id])
+  orders    Order[]
+}
+
+model PaymentMethod {
+  id        Int      @id @default(autoincrement())
+  name      String
+  type      String   @unique
+  enabled   Boolean  @default(true)
+  upiId     String?
+  createdAt DateTime @default(now())
+  payments  Payment[]
+}
+
+model Coupon {
+  id            Int      @id @default(autoincrement())
+  code          String   @unique
+  discountType  String
+  discountValue Float
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+}
+
+model Promotion {
+  id             Int      @id @default(autoincrement())
+  name           String
+  scope          String
+  productId      Int?
+  minQuantity    Int?
+  minOrderAmount Float?
+  discountType   String
+  discountValue  Float
+  active         Boolean  @default(true)
+  product        Product? @relation(fields: [productId], references: [id])
+}
+
+model Session {
+  id            Int       @id @default(autoincrement())
+  openedById    Int
+  status        String    @default("open")
+  openingCash   Float     @default(0)
+  closingCash   Float?
+  closingSales  Float?
+  openedAt      DateTime  @default(now())
+  closedAt      DateTime?
+  openedBy      User      @relation(fields: [openedById], references: [id])
+  orders        Order[]
+}
+
+model Order {
+  id             Int             @id @default(autoincrement())
+  orderNumber    String          @unique
+  status         String          @default("draft")
+  subtotal       Float           @default(0)
+  tax            Float           @default(0)
+  discount       Float           @default(0)
+  total          Float           @default(0)
+  couponCode     String?
+  tableId        Int?
+  customerId     Int?
+  sessionId      Int?
+  createdById    Int
+  createdAt      DateTime        @default(now())
+  paidAt         DateTime?
+  table          CafeTable?      @relation(fields: [tableId], references: [id])
+  customer       Customer?       @relation(fields: [customerId], references: [id])
+  session        Session?        @relation(fields: [sessionId], references: [id])
+  createdBy      User            @relation(fields: [createdById], references: [id])
+  items          OrderItem[]
+  payments       Payment[]
+  kitchenTicket  KitchenTicket?
+}
+
+model OrderItem {
+  id          Int                 @id @default(autoincrement())
+  orderId     Int
+  productId   Int
+  name        String
+  quantity    Int
+  unitPrice   Float
+  tax         Float               @default(0)
+  discount    Float               @default(0)
+  lineTotal   Float
+  order       Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product     Product             @relation(fields: [productId], references: [id])
+  kitchenItem KitchenTicketItem?
+}
+
+model Payment {
+  id              Int           @id @default(autoincrement())
+  orderId          Int
+  paymentMethodId  Int
+  amount           Float
+  receivedAmount   Float?
+  changeDue        Float?
+  reference        String?
+  status           String        @default("completed")
+  createdAt        DateTime      @default(now())
+  order            Order         @relation(fields: [orderId], references: [id])
+  paymentMethod    PaymentMethod @relation(fields: [paymentMethodId], references: [id])
+}
+
+model KitchenTicket {
+  id        Int                 @id @default(autoincrement())
+  orderId   Int                 @unique
+  stage     String              @default("to_cook")
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+  order     Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  items     KitchenTicketItem[]
+}
+
+model KitchenTicketItem {
+  id              Int           @id @default(autoincrement())
+  kitchenTicketId Int
+  orderItemId      Int           @unique
+  completed        Boolean       @default(false)
+  kitchenTicket    KitchenTicket @relation(fields: [kitchenTicketId], references: [id], onDelete: Cascade)
+  orderItem        OrderItem     @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+}
