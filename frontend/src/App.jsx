@@ -23,6 +23,13 @@ function stageLabel(stage) {
   }[stage] || stage
 }
 
+function tableOrderLabel(order) {
+  if (!order) return ''
+  if (order.kitchenTicket?.stage === 'completed') return `Ready to pay ${money(order.total)}`
+  if (order.kitchenTicket?.stage) return `${stageLabel(order.kitchenTicket.stage)} ${money(order.total)}`
+  return `${order.status} ${money(order.total)}`
+}
+
 function App() {
   const [token, setToken] = useState(localStorage.getItem('cafe_token') || '')
   const [user, setUser] = useState(() => {
@@ -276,6 +283,52 @@ function PosTerminal({ api, setMessage, site }) {
     refresh().catch((error) => setMessage(error.message))
   }, [])
 
+  function loadOrderIntoCart(savedOrder) {
+    setOrder(savedOrder)
+    setCustomerId(savedOrder.customerId ? String(savedOrder.customerId) : '')
+    setCouponCode(savedOrder.couponCode || '')
+    setCashReceived('')
+    setReference('')
+    setCart(savedOrder.items.map((item) => ({
+      productId: item.productId,
+      name: item.name,
+      price: item.unitPrice,
+      tax: item.product?.tax || item.tax || 0,
+      quantity: item.quantity,
+      color: item.product?.category?.color || '#3157ff',
+    })))
+  }
+
+  async function selectTable(table) {
+    setSelectedTable(table)
+    localStorage.setItem('cafe_current_table_id', String(table.id))
+    const activeOrder = table.orders?.[0]
+    if (!activeOrder) {
+      setOrder(null)
+      setCart([])
+      setCouponCode('')
+      setCustomerId('')
+      return
+    }
+
+    const orders = await api('/api/orders')
+    const savedOrder = orders.find((item) => item.id === activeOrder.id)
+    if (savedOrder) {
+      loadOrderIntoCart(savedOrder)
+      setMessage(`Loaded ${savedOrder.orderNumber} for table ${table.number}.`)
+    }
+  }
+
+  useEffect(() => {
+    if (!data || selectedTable) return
+    const tableId = localStorage.getItem('cafe_current_table_id')
+    if (!tableId) return
+    const savedTable = data.floors.flatMap((floor) => floor.tables).find((table) => String(table.id) === tableId)
+    if (savedTable) {
+      selectTable(savedTable).catch(() => {})
+    }
+  }, [data, selectedTable])
+
   const products = useMemo(() => {
     if (!data) return []
     return data.products.filter((product) => {
@@ -321,6 +374,7 @@ function PosTerminal({ api, setMessage, site }) {
       ? await api(`/api/orders/${order.id}`, { method: 'PATCH', body: JSON.stringify(payload) })
       : await api('/api/orders', { method: 'POST', body: JSON.stringify(payload) })
     setOrder(saved)
+    await refresh()
     setMessage(`Order ${saved.orderNumber} saved.`)
     return saved
   }
@@ -329,6 +383,7 @@ function PosTerminal({ api, setMessage, site }) {
     const saved = order || await saveOrder()
     if (!saved) return
     await api(`/api/orders/${saved.id}/send-to-kitchen`, { method: 'POST' })
+    await refresh()
     setMessage('Order sent to Kitchen Display.')
   }
 
@@ -342,7 +397,24 @@ function PosTerminal({ api, setMessage, site }) {
     setOrder(paid)
     setCart([])
     setCouponCode('')
+    setCustomerId('')
+    localStorage.removeItem('cafe_current_table_id')
+    await refresh()
     setMessage(`Payment completed for ${paid.orderNumber}.`)
+  }
+
+  async function cancelOrder() {
+    if (!order) return setMessage('Select an active table order first.')
+    await api(`/api/orders/${order.id}/cancel`, { method: 'POST' })
+    setOrder(null)
+    setCart([])
+    setCouponCode('')
+    setCustomerId('')
+    setCashReceived('')
+    setReference('')
+    localStorage.removeItem('cafe_current_table_id')
+    await refresh()
+    setMessage('Order cancelled and table is free.')
   }
 
   if (!data) return <PageTitle title="Loading POS terminal" site={site} />
@@ -354,7 +426,10 @@ function PosTerminal({ api, setMessage, site }) {
       <PageTitle title="Take orders at table speed" kicker="POS Terminal" site={site} />
       <div className="pos-layout">
         <section className="panel floor-panel">
-          <h2>Table View</h2>
+          <div className="panel-heading">
+            <h2>Table View</h2>
+            <button type="button" onClick={refresh}>Refresh</button>
+          </div>
           {data.floors.map((floor) => (
             <div key={floor.id} className="floor-block">
               <strong>{floor.name}</strong>
@@ -367,10 +442,10 @@ function PosTerminal({ api, setMessage, site }) {
                     activeOrder ? 'occupied' : '',
                   ].filter(Boolean).join(' ')
                   return (
-                  <button key={table.id} className={className} onClick={() => setSelectedTable(table)}>
+                  <button key={table.id} className={className} onClick={() => selectTable(table)}>
                     <span>{table.number}</span>
                     <small>{table.seats} seats</small>
-                    {activeOrder && <em>{activeOrder.status} {money(activeOrder.total)}</em>}
+                    {activeOrder && <em>{tableOrderLabel(activeOrder)}</em>}
                   </button>
                 )})}
               </div>
@@ -431,6 +506,9 @@ function PosTerminal({ api, setMessage, site }) {
             <button onClick={saveOrder}>Save Draft</button>
             <button onClick={sendToKitchen}>Send to Kitchen</button>
           </div>
+          {order && order.status !== 'paid' && (
+            <button className="danger" onClick={cancelOrder}>Cancel Order / Free Table</button>
+          )}
           <select value={paymentMethodId} onChange={(e) => setPaymentMethodId(e.target.value)}>
             {enabledMethods.map((method) => <option key={method.id} value={method.id}>{method.name}</option>)}
           </select>
@@ -446,13 +524,42 @@ function PosTerminal({ api, setMessage, site }) {
 }
 
 function Receipt({ order }) {
+  const customerName = order.customer?.name || 'Walk-in Customer'
+  const tableName = order.table ? `${order.table.floor?.name || 'Floor'} / Table ${order.table.number}` : 'Takeaway'
+
   return (
     <div className="receipt">
-      <strong>Receipt {order.orderNumber}</strong>
-      <span>Status: {order.status}</span>
-      <span>Total: {money(order.total)}</span>
-      <button onClick={() => window.print()}>Print Receipt</button>
-      <button onClick={() => alert('Email receipt mocked for hackathon demo.')}>Send Email</button>
+      <div className="receipt-head">
+        <div>
+          <strong>Cafe POS Invoice</strong>
+          <span>{order.orderNumber}</span>
+        </div>
+        <em>{order.status}</em>
+      </div>
+      <div className="receipt-meta">
+        <span><b>Customer</b>{customerName}</span>
+        <span><b>Table</b>{tableName}</span>
+        <span><b>Date</b>{new Date(order.createdAt).toLocaleString()}</span>
+      </div>
+      <div className="receipt-items">
+        {order.items?.map((item) => (
+          <div key={item.id || item.productId}>
+            <span>{item.name}</span>
+            <small>{item.quantity} x {money(item.unitPrice)}</small>
+            <b>{money(item.lineTotal || item.unitPrice * item.quantity)}</b>
+          </div>
+        ))}
+      </div>
+      <div className="receipt-total">
+        <span>Subtotal <b>{money(order.subtotal)}</b></span>
+        <span>Tax <b>{money(order.tax)}</b></span>
+        <span>Discount <b>{money(order.discount)}</b></span>
+        <strong>Total <b>{money(order.total)}</b></strong>
+      </div>
+      <div className="receipt-actions">
+        <button onClick={() => window.print()}>Print Receipt</button>
+        <button onClick={() => alert('Email receipt mocked for hackathon demo.')}>Send Email</button>
+      </div>
     </div>
   )
 }
