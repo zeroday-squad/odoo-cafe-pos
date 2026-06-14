@@ -224,7 +224,13 @@ app.get("/api/bootstrap", auth, async (req, res) => {
             include: {
               orders: {
                 where: { status: { in: ["draft", "sent"] } },
-                select: { id: true, orderNumber: true, status: true, total: true },
+                select: {
+                  id: true,
+                  orderNumber: true,
+                  status: true,
+                  total: true,
+                  kitchenTicket: { select: { stage: true } },
+                },
                 orderBy: { createdAt: "desc" },
               },
             },
